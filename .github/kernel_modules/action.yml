@@ -16,9 +16,21 @@ runs:
       run: |
         set -euo pipefail
         echo '${{ inputs.op_config_json }}' > /tmp/config.json
-        python3 -c 'import json; data=json.load(open("/tmp/config.json"));
+        python3 - <<'PY' >> "$GITHUB_ENV"
+import json
+
+with open("/tmp/config.json") as fh:
+    data = json.load(fh)
+
 for key, value in data.items():
-    print(f"OP_{key.upper()}={"true" if value is True else "false" if value is False else value}")' >> "$GITHUB_ENV"
+    if value is True:
+        rendered = "true"
+    elif value is False:
+        rendered = "false"
+    else:
+        rendered = value
+    print(f"OP_{key.upper()}={rendered}")
+PY
         echo "Parsed config:"
         python3 -m json.tool /tmp/config.json
 
