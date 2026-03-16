@@ -16,5 +16,10 @@
   "ttl": true,
   "ip_set": true,
   "unicode": true,
-  "uname": "OP-WILD"
+  "uname": "OP-WILD",
+  "platform_family": "qcom",
+  "nethunter_kernel": true,
+  "nethunter_modules": true,
+  "nethunter_modules_strategy": "qcom_vendor",
+  "nethunter_modules_note": "QCOM vendor module builder implemented"
 }

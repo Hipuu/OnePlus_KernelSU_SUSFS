@@ -1132,6 +1132,14 @@ runs:
         CONFIG_TMPFS_POSIX_ACL=y
         EOF
 
+    - name: Add Nethunter inline configs
+      if: ${{ env.OP_NETHUNTER_KERNEL == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        source "$GITHUB_WORKSPACE/.github/scripts/nethunter-lib.sh"
+        echo "Add Nethunter inline configs"
+        apply_nethunter_kernel_config "$COMMON_KERNEL_FOLDER/arch/arm64/configs/gki_defconfig"
 
     - name: Add BBR
       if: ${{ env.OP_BBR == 'true' }}

@@ -17,13 +17,11 @@ Flashing this kernel will not void your warranty, but there is always a risk of 
 - 🧠 Understand the risks before proceeding
 
 - I am **not responsible** for bricked devices, damaged hardware, or any issues that arise from using this kernel.
-
-- **Please** do thorough research and fully understand the features added in this kernel before flashing it!
-
-- By flashing this kernel, **YOU** are choosing to make these modifications. If something goes wrong, **do not blame me**!
+- **Please** do thorough research and fully understand the features added in this kernel before flashing it.
+- By flashing this kernel, **YOU** are choosing to make these modifications. If something goes wrong, **do not blame me**.
 
 <div align="center">
-  
+
 # **🚨 Proceed at your own risk!**
 
 </div>
@@ -53,24 +51,62 @@ Flashing this kernel will not void your warranty, but there is always a risk of 
 
 ## Device Compatibility
 
-- Please verify the device compatibility before flashing here: [Compatibility_Info](https://github.com/WildKernels/OnePlus_KernelSU_SUSFS/blob/main/compatibility.md). 
+- Please verify the device compatibility before flashing here: [Compatibility_Info](https://github.com/WildKernels/OnePlus_KernelSU_SUSFS/blob/main/compatibility.md).
 
 ---
 
 ## ✨ Features
 
-- 🔐 **KernelSU / KernelSU-Next**: A root solution for Android GKI devices that works in kernel mode and grants root permission to userspace applications directly in kernel space
-- 🔥 **WildKSU Manager Support**: Support for the Root Manager developed by our team with lots of customisations
-- 🥷 **SUSFS**: An addon root hiding kernel patches and userspace module for KernelSU
-- 🛡️ **BBG**: LSM-based Baseband Guard security to protect critical device partitions
-- 🛠️ **HMBIRD SCX**: Scheduler extensions for SM8750/MT6991 devices
-- 🖧 **BBRv1**: Improved TCP congestion control
-- ✅ **LTO**: Link Time Optimisation enabled
-- 🚀 **Optimisation patches**: Memory, I/O, CPU scheduler, network and other general tunings
-- 🌐 **TTL Target Support**: Network packet manipulation
-- 🧱 **IP Set & IPv6 NAT Support**: Advanced firewall capabilities and IPv6 NAT Support
-- ⚡️ **TMPFS XATTR / POSIX ACL**: Extended TMPFS support for meta modules and Mountify
-- </> **Unicode Bypass Fix**: Prevent path traversal and other detections using non-printable Unicode codepoints [Experimental]
+- 🔐 **KernelSU / KernelSU-Next**: Kernel-level root support
+- 🔥 **WildKSU Manager Support**
+- 🥷 **SUSFS** integration
+- 🛡️ **BBG**: Baseband Guard security
+- 🛠️ **HMBIRD SCX**: Enabled on supported SM8750 / MT6991 targets
+- 🖧 **BBRv1**
+- ✅ **LTO**
+- 🚀 **Optimisation patches**
+- 🌐 **TTL Target Support**
+- 🧱 **IP Set & IPv6 NAT Support**
+- ⚡️ **TMPFS XATTR / POSIX ACL**
+- </> **Unicode Bypass Fix**
+- 📡 **Config-driven Nethunter support**
+  - `nethunter_kernel`: generic kernel config toggles; architecture is shared and can be enabled per config
+  - `nethunter_modules`: external module build toggle; currently implemented only for `platform_family=qcom` with `nethunter_modules_strategy=qcom_vendor`
+  - MediaTek configs now carry explicit guardrails/notes instead of pretending the Qualcomm builder works there
+
+---
+
+## 📡 Nethunter support status
+
+This repo no longer claims a fake all-device Nethunter module path.
+
+### What is actually implemented
+
+- **Kernel-side Nethunter config framework:** generic and reusable across device configs
+- **External module builder framework:** config-driven and family-aware
+- **Implemented family today:**
+  - `qcom` + `qcom_vendor` module strategy
+- **Not implemented yet:**
+  - `mediatek` external module builder
+
+### Current enabled configs
+
+At the moment, the repo only enables Nethunter on the validated OP11 config set:
+- `configs/oos14/OP11.json`
+- `configs/oos15/OP11.json`
+- `configs/oos16/OP11.json`
+
+Other devices now have the same config schema (`platform_family`, `nethunter_kernel`, `nethunter_modules`, `nethunter_modules_strategy`, `nethunter_modules_note`) so support can be expanded honestly, one family/device at a time.
+
+### How to enable support for a new device
+
+1. Set `platform_family` correctly (`qcom` or `mediatek` currently).
+2. Enable `nethunter_kernel` only if the kernel-side config set is desired.
+3. Enable `nethunter_modules` only if that family/strategy is implemented and tested.
+4. Set `nethunter_modules_strategy` to a real implemented path.
+5. Update docs if you add a new supported family.
+
+If a config does not have a working external module strategy, leave `nethunter_modules=false`.
 
 ---
 
@@ -80,7 +116,7 @@ For GKI installation, please follow the official guide:
 
 📖 **[KernelSU Installation Guide](https://kernelsu.org/guide/installation.html)**
 
-You can also find Installation instructions in the release notes.
+You can also find installation instructions in the release notes.
 
 ---
 
@@ -89,7 +125,6 @@ You can also find Installation instructions in the release notes.
 **These amazing people help make this project possible! ❤️**
 
 <div align="center">
-
 
 | 🔧 **Project** | 👨‍💻 **Developer** | 🔗 **Link** |
 |:---------------:|:----------------:|:-----------:|
@@ -103,7 +138,7 @@ You can also find Installation instructions in the release notes.
 
 </div>
 
-*If you have contributed and are not listed here, please remind me!* 🙏
+*If you have contributed and are not listed here, please remind me.* 🙏
 
 ---
 
@@ -111,14 +146,14 @@ You can also find Installation instructions in the release notes.
 
 If you encounter any issues or need help, feel free to:
 - 🐛 Open an issue in this repository
-- 💬 Reach out to me directly
+- 💬 Reach out directly
 
 ---
 
 ## 📱 Connect With Us
 
 <div align="center">
-  
+
 [![Telegram](https://img.shields.io/badge/Telegram-fatalcoder524-blue?logo=telegram)](https://t.me/anonymous_yolo)
 [![Telegram Group](https://img.shields.io/badge/Telegram-WildKernels-blue?logo=telegram)](https://t.me/WildKernels)
 
@@ -128,9 +163,8 @@ If you encounter any issues or need help, feel free to:
 
 ## 💝 Donations
 
-Any and all donations are appreciated!
+Any and all donations are appreciated.
 
 PayPal: [paypal.me/fatalcoder524](https://paypal.me/fatalcoder524)
 
 DM on Telegram for UPI donations!
-

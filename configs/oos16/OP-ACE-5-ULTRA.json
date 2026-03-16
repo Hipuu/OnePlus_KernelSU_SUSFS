@@ -16,5 +16,10 @@
   "ttl": true,
   "ip_set": true,
   "unicode": true,
-  "uname": "OP-WILD"
+  "uname": "OP-WILD",
+  "platform_family": "mediatek",
+  "nethunter_kernel": false,
+  "nethunter_modules": false,
+  "nethunter_modules_strategy": "none",
+  "nethunter_modules_note": "MTK module builder not implemented yet"
 }
