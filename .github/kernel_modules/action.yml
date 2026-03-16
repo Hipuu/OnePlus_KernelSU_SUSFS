@@ -209,11 +209,7 @@ runs:
         set -euo pipefail
         cd "$SOURCE_ROOT"
         if [ -d drivers/net/wireless/realtek ]; then
-          cd drivers/net/wireless/realtek
-          rm -rf rtw88
-          git clone --depth=1 https://github.com/lwfinger/rtw88.git
-          sed -i 's/$(CONFIG_RTW88)/m/g' Makefile || true
-          sed -i '/^source "drivers\/net\/wireless\/realtek\/rtw88\/Kconfig"$/s/.*/ /' Kconfig || true
+          echo "Skipping out-of-tree rtw88 injection: current GKI module builds do not export the required mac80211/ieee80211 symbols for lwfinger/rtw88, which causes modpost failures."
         else
           echo "No realtek driver directory found; skipping rtw88 injection"
         fi
