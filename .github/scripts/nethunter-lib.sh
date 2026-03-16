@@ -10,7 +10,7 @@ nethunter_platform_family() {
   fi
 
   case "${OP_SOC:-}" in
-    pineapple|sun|kalama|waipio|canoe|blair|crow|cliffs)
+    pineapple|sun|kalama|waipio|canoe|blair|crow|cliffs|parrot|volcano)
       printf 'qcom\n'
       ;;
     dimensity*|helio*)
@@ -26,13 +26,48 @@ nethunter_modules_supported() {
   local family
   family="$(nethunter_platform_family)"
   case "$family:${OP_NETHUNTER_MODULES_STRATEGY:-none}" in
-    qcom:qcom_vendor)
+    qcom:qcom_legacy_vendor|qcom:qcom_ddk_vendor|qcom:qcom_aosp_vendor|mediatek:mtk_gki)
       return 0
       ;;
     *)
       return 1
       ;;
   esac
+}
+
+nethunter_source_root() {
+  local kernel_platform_dir="$1"
+  if [[ -d "$kernel_platform_dir/common" ]]; then
+    printf '%s\n' "$kernel_platform_dir/common"
+  elif [[ -d "$kernel_platform_dir/msm-kernel" ]]; then
+    printf '%s\n' "$kernel_platform_dir/msm-kernel"
+  else
+    return 1
+  fi
+}
+
+nethunter_vendor_fragment() {
+  local source_root="$1"
+  local soc="$2"
+  local candidate="$source_root/arch/arm64/configs/vendor/${soc}_GKI.config"
+  [[ -f "$candidate" ]] && printf '%s\n' "$candidate"
+}
+
+nethunter_detect_clang_bin() {
+  local kernel_platform_dir="$1"
+  local base latest
+  for base in \
+    "$kernel_platform_dir/prebuilts" \
+    "$kernel_platform_dir/prebuilts-master" \
+    "$kernel_platform_dir/build/prebuilts"; do
+    [[ -d "$base" ]] || continue
+    latest=$(find "$base" -type f -path '*/clang*/bin/clang' 2>/dev/null | sort -V | tail -n1 || true)
+    if [[ -n "$latest" ]]; then
+      dirname "$latest"
+      return 0
+    fi
+  done
+  command -v clang >/dev/null 2>&1 && dirname "$(command -v clang)"
 }
 
 append_config_if_missing() {

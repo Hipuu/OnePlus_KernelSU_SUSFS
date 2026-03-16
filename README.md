@@ -71,42 +71,48 @@ Flashing this kernel will not void your warranty, but there is always a risk of 
 - </> **Unicode Bypass Fix**
 - 📡 **Config-driven Nethunter support**
   - `nethunter_kernel`: generic kernel config toggles; architecture is shared and can be enabled per config
-  - `nethunter_modules`: external module build toggle; currently implemented only for `platform_family=qcom` with `nethunter_modules_strategy=qcom_vendor`
-  - MediaTek configs now carry explicit guardrails/notes instead of pretending the Qualcomm builder works there
+  - `nethunter_modules`: family-aware module build toggle implemented across the repo's real kernel layouts
+  - Strategies are explicit per layout family (`qcom_legacy_vendor`, `qcom_ddk_vendor`, `qcom_aosp_vendor`, `mtk_gki`) instead of pretending one builder fits every tree
 
 ---
 
 ## 📡 Nethunter support status
 
-This repo no longer claims a fake all-device Nethunter module path.
+This repo now groups Nethunter module support by the kernel layouts that actually exist in the synced manifests.
 
 ### What is actually implemented
 
-- **Kernel-side Nethunter config framework:** generic and reusable across device configs
-- **External module builder framework:** config-driven and family-aware
-- **Implemented family today:**
-  - `qcom` + `qcom_vendor` module strategy
-- **Not implemented yet:**
-  - `mediatek` external module builder
+- **Kernel-side Nethunter config framework:** still config-driven
+- **In-tree module build:** implemented for every device family currently described by the manifests in this repo
+- **External vendor-module build:** implemented for Qualcomm trees when the synced source actually contains those vendor module directories
+
+### Implemented layout strategies
+
+- `qcom_legacy_vendor`
+  - older Qualcomm trees with legacy prebuilts / vendor layout
+- `qcom_ddk_vendor`
+  - Qualcomm DDK-style trees (`kernel_platform/common`, newer prebuilts layout, optional Rust/DDK bits)
+- `qcom_aosp_vendor`
+  - newest Qualcomm AOSP-main-kernel style trees (for example SM8845 / SM8850 manifests)
+- `mtk_gki`
+  - MediaTek linked-kernel trees (`kernel_platform/common` linked to `kernel-5.10`, `kernel-6.1`, or `kernel-6.6`)
+
+### Honest limitations
+
+- MediaTek manifests in this repo currently expose the kernel tree itself, but not separate vendor external-module repositories. Those configs now build the in-tree Nethunter module set and explicitly stop there.
+- Qualcomm configs attempt external vendor modules only when the synced tree actually contains the referenced module directories. Missing vendor repos are reported as such instead of being faked.
+- The OP11-specific patchset remains model-specific; other devices use the generic family pipeline unless real per-model patches are added.
 
 ### Current enabled configs
 
-At the moment, the repo only enables Nethunter on the validated OP11 config set:
-- `configs/oos14/OP11.json`
-- `configs/oos15/OP11.json`
-- `configs/oos16/OP11.json`
+All shipped device configs now carry an explicit Nethunter module strategy and are enabled for the family path that matches their manifest layout.
 
-Other devices now have the same config schema (`platform_family`, `nethunter_kernel`, `nethunter_modules`, `nethunter_modules_strategy`, `nethunter_modules_note`) so support can be expanded honestly, one family/device at a time.
-
-### How to enable support for a new device
+### How to add support for a new device
 
 1. Set `platform_family` correctly (`qcom` or `mediatek` currently).
-2. Enable `nethunter_kernel` only if the kernel-side config set is desired.
-3. Enable `nethunter_modules` only if that family/strategy is implemented and tested.
-4. Set `nethunter_modules_strategy` to a real implemented path.
-5. Update docs if you add a new supported family.
-
-If a config does not have a working external module strategy, leave `nethunter_modules=false`.
+2. Pick the real layout strategy that matches the manifest/tree shape.
+3. Enable `nethunter_modules` only after wiring that strategy to the synced source layout.
+4. Update docs if the manifest introduces a genuinely new family or blocker.
 
 ---
 

@@ -20,6 +20,6 @@
   "platform_family": "qcom",
   "nethunter_kernel": true,
   "nethunter_modules": true,
-  "nethunter_modules_strategy": "qcom_vendor",
-  "nethunter_modules_note": "QCOM vendor module builder implemented"
+  "nethunter_modules_strategy": "qcom_ddk_vendor",
+  "nethunter_modules_note": "QCOM DDK kernel tree implemented; builds in-tree modules plus synced vendor modules when present"
 }

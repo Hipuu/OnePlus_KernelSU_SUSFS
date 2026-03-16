@@ -18,9 +18,17 @@ runs:
       run: |
         set -euo pipefail
         echo '${{ inputs.op_config_json }}' > /tmp/config.json
-        jq -r 'to_entries[] | "OP_\(.key | ascii_upcase)=\(.value)"' /tmp/config.json >> "$GITHUB_ENV"
+        python3 - <<'PY' >> "$GITHUB_ENV"
+import json
+with open('/tmp/config.json') as fh:
+    data = json.load(fh)
+for key, value in data.items():
+    if isinstance(value, bool):
+        value = 'true' if value else 'false'
+    print(f"OP_{key.upper()}={value}")
+PY
         echo "Parsed config:"
-        jq '.' /tmp/config.json
+        python3 -m json.tool /tmp/config.json
 
     - name: Load Nethunter helpers
       shell: bash
@@ -47,7 +55,8 @@ runs:
           echo "NH_MODULES_SUPPORTED=true" >> "$GITHUB_ENV"
         else
           echo "NH_MODULES_SUPPORTED=false" >> "$GITHUB_ENV"
-          echo "::notice::Skipping Nethunter external module build for ${OP_MODEL}: family=$family strategy=${OP_NETHUNTER_MODULES_STRATEGY:-none}. ${OP_NETHUNTER_MODULES_NOTE:-No strategy configured}."
+          echo "::error::Unsupported Nethunter module strategy for ${OP_MODEL}: family=$family strategy=${OP_NETHUNTER_MODULES_STRATEGY:-none}. ${OP_NETHUNTER_MODULES_NOTE:-No strategy configured}."
+          exit 1
         fi
 
     - name: Setup Base Environment
@@ -92,27 +101,53 @@ runs:
         done
         $success || { echo "repo sync failed after 3 attempts"; exit 1; }
 
-    - name: Set Paths
+    - name: Detect layout and paths
       if: ${{ env.NH_MODULES_SUPPORTED == 'true' }}
       shell: bash
       run: |
         set -euo pipefail
+        source /tmp/nethunter-lib.sh
         CONFIG_DIR="$GITHUB_WORKSPACE/$CONFIG"
         KERNEL_PLATFORM="$CONFIG_DIR/kernel_platform"
-        MSM="$KERNEL_PLATFORM/msm-kernel"
+        SOURCE_ROOT="$(nethunter_source_root "$KERNEL_PLATFORM")"
+        OUT_DIR="$SOURCE_ROOT/out"
         ARTIFACTS_DIR="$CONFIG_DIR/artifacts"
         mkdir -p "$ARTIFACTS_DIR"
+
+        case "${OP_NETHUNTER_MODULES_STRATEGY}" in
+          qcom_legacy_vendor)
+            LAYOUT_DESC="QCOM legacy vendor tree"
+            ;;
+          qcom_ddk_vendor)
+            LAYOUT_DESC="QCOM DDK vendor tree"
+            ;;
+          qcom_aosp_vendor)
+            LAYOUT_DESC="QCOM AOSP/DDK vendor tree"
+            ;;
+          mtk_gki)
+            LAYOUT_DESC="MediaTek linked GKI tree"
+            ;;
+          *)
+            echo "::error::Unhandled strategy ${OP_NETHUNTER_MODULES_STRATEGY}"
+            exit 1
+            ;;
+        esac
+
         echo "CONFIG_DIR=$CONFIG_DIR" >> "$GITHUB_ENV"
         echo "KERNEL_PLATFORM=$KERNEL_PLATFORM" >> "$GITHUB_ENV"
-        echo "MSM=$MSM" >> "$GITHUB_ENV"
+        echo "SOURCE_ROOT=$SOURCE_ROOT" >> "$GITHUB_ENV"
+        echo "OUT_DIR=$OUT_DIR" >> "$GITHUB_ENV"
         echo "ARTIFACTS_DIR=$ARTIFACTS_DIR" >> "$GITHUB_ENV"
+        echo "LAYOUT_DESC=$LAYOUT_DESC" >> "$GITHUB_ENV"
+        echo "Using source root: $SOURCE_ROOT"
+        echo "Layout: $LAYOUT_DESC"
 
     - name: Get Kernel Version Info
       if: ${{ env.NH_MODULES_SUPPORTED == 'true' }}
       shell: bash
       run: |
         set -euo pipefail
-        cd "$MSM"
+        cd "$SOURCE_ROOT"
         BRANCH_LINE=$(grep '^[[:space:]]*BRANCH=' build.config.common build.config.constants 2>/dev/null | head -n1 || true)
         [ -n "$BRANCH_LINE" ] || { echo "Error: No BRANCH= found"; exit 1; }
         BRANCH_VALUE="${BRANCH_LINE#*=}"
@@ -137,169 +172,187 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        cd "$KERNEL_PLATFORM"
-        rm -f msm-kernel/android/abi_gki_protected_exports_* || true
+        rm -f "$SOURCE_ROOT"/android/abi_gki_protected_exports_* || true
+        rm -f "$KERNEL_PLATFORM"/msm-kernel/android/abi_gki_protected_exports_* || true
 
-    - name: Merge vendor config
+    - name: Prepare defconfig
       if: ${{ env.NH_MODULES_SUPPORTED == 'true' }}
       shell: bash
       run: |
         set -euo pipefail
-        OUT=out
-        cd "$MSM"
+        source /tmp/nethunter-lib.sh
+        DEFCONFIG="$SOURCE_ROOT/arch/arm64/configs/gki_defconfig"
+        VENDOR_FRAGMENT="$(nethunter_vendor_fragment "$SOURCE_ROOT" "$OP_SOC" || true)"
+        cd "$SOURCE_ROOT"
         make ARCH=arm64 mrproper
-        mkdir -p "$OUT"
-        ./scripts/kconfig/merge_config.sh -O "$OUT" -m arch/arm64/configs/gki_defconfig arch/arm64/configs/vendor/${OP_SOC}_GKI.config
-        cp "$OUT/.config" arch/arm64/configs/gki_defconfig
-        rm "$OUT/.config"
+        mkdir -p "$OUT_DIR"
+        if [[ -n "$VENDOR_FRAGMENT" ]]; then
+          echo "Merging vendor fragment: $VENDOR_FRAGMENT"
+          ./scripts/kconfig/merge_config.sh -O "$OUT_DIR" -m "$DEFCONFIG" "$VENDOR_FRAGMENT"
+          cp "$OUT_DIR/.config" "$DEFCONFIG"
+          rm -f "$OUT_DIR/.config"
+        else
+          echo "No vendor fragment found for soc=$OP_SOC; using plain gki_defconfig"
+        fi
+        apply_nethunter_module_config "$DEFCONFIG" ./scripts/config
 
-    - name: Enable Nethunter driver modules
+    - name: Apply family/model specific Nethunter patches
       if: ${{ env.NH_MODULES_SUPPORTED == 'true' }}
       shell: bash
       run: |
         set -euo pipefail
-        source /tmp/nethunter-lib.sh
-        cd "$MSM"
-        apply_nethunter_module_config arch/arm64/configs/gki_defconfig ./scripts/config
-
-    - name: Apply QCOM family Nethunter patches
-      if: ${{ env.NH_MODULES_SUPPORTED == 'true' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        source /tmp/nethunter-lib.sh
-        cd "$MSM"
-        if [ "$OP_PLATFORM_FAMILY" != "qcom" ]; then
-          echo "No QCOM-specific Nethunter patches needed for family=$OP_PLATFORM_FAMILY"
-          exit 0
+        cd "$SOURCE_ROOT"
+        if [ "$OP_PLATFORM_FAMILY" = "qcom" ] && [ "$OP_MODEL" = "OP11" ]; then
+          for patch_file in "$GITHUB_WORKSPACE"/my_patches/kernel_patches/op11/msm/*.patch; do
+            [ -f "$patch_file" ] || continue
+            echo "Applying patch: $patch_file"
+            patch -p1 < "$patch_file"
+          done
+        else
+          echo "No model-specific patch set defined for ${OP_MODEL}; using generic family pipeline."
         fi
 
-        case "$OP_MODEL" in
-          OP11)
-            for patch_file in "$GITHUB_WORKSPACE"/my_patches/kernel_patches/op11/msm/*.patch; do
-              [ -f "$patch_file" ] || continue
-              echo "Applying patch: $patch_file"
-              patch -p1 < "$patch_file"
-            done
-            ;;
-          *)
-            echo "No model-specific QCOM patch set defined for ${OP_MODEL}; using generic module config only."
-            ;;
-        esac
-
-    - name: Add memkernel module
+    - name: Add optional out-of-tree helper sources
       if: ${{ env.NH_MODULES_SUPPORTED == 'true' }}
       shell: bash
       run: |
         set -euo pipefail
-        cd "$MSM"
-        curl -LSs "https://raw.githubusercontent.com/Poko-Apps/MemKernel/main/kernel/setup.sh" | bash -s M br0k3n
-
-    - name: Add rtw88 modules
-      if: ${{ env.NH_MODULES_SUPPORTED == 'true' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        cd "$MSM/drivers/net/wireless/realtek/"
-        rm -rf rtw88
-        git clone https://github.com/lwfinger/rtw88.git
-        sed -i 's/$(CONFIG_RTW88)/m/g' Makefile
-        sed -i '/^source "drivers\/net\/wireless\/realtek\/rtw88\/Kconfig"$/s/.*/ /' Kconfig
+        cd "$SOURCE_ROOT"
+        if [ -d drivers/net/wireless/realtek ]; then
+          cd drivers/net/wireless/realtek
+          rm -rf rtw88
+          git clone --depth=1 https://github.com/lwfinger/rtw88.git
+          sed -i 's/$(CONFIG_RTW88)/m/g' Makefile || true
+          sed -i '/^source "drivers\/net\/wireless\/realtek\/rtw88\/Kconfig"$/s/.*/ /' Kconfig || true
+        else
+          echo "No realtek driver directory found; skipping rtw88 injection"
+        fi
+        if [ "$OP_PLATFORM_FAMILY" = "qcom" ]; then
+          cd "$SOURCE_ROOT"
+          curl -LSs "https://raw.githubusercontent.com/Poko-Apps/MemKernel/main/kernel/setup.sh" | bash -s M br0k3n || echo "MemKernel injection skipped"
+        fi
 
     - name: Detect Clang
       if: ${{ env.NH_MODULES_SUPPORTED == 'true' }}
       shell: bash
       run: |
         set -euo pipefail
-        KP="$KERNEL_PLATFORM"
-        CLANG_FOUND=false
-        for base in "$KP/prebuilts" "$KP/prebuilts-master"; do
-          [ -d "$base/clang/host/linux-x86" ] || continue
-          latest=$(ls -d "$base"/clang/host/linux-x86/clang-r*/ 2>/dev/null | sort -V | tail -n1 || true)
-          if [ -n "$latest" ] && [ -x "$latest/bin/clang" ]; then
-            CLANG_BIN="$latest/bin"
-            CLANG_FOUND=true
-          fi
-        done
-        if ! $CLANG_FOUND && command -v clang >/dev/null 2>&1; then
-          CLANG_BIN="$(dirname "$(command -v clang)")"
-          CLANG_FOUND=true
-        fi
-        $CLANG_FOUND || { echo "No clang toolchain found"; exit 1; }
+        source /tmp/nethunter-lib.sh
+        CLANG_BIN="$(nethunter_detect_clang_bin "$KERNEL_PLATFORM" || true)"
+        [ -n "$CLANG_BIN" ] || { echo "No clang toolchain found"; exit 1; }
         echo "CLANG_BIN_PATH=$CLANG_BIN" >> "$GITHUB_ENV"
 
-    - name: Build Kernel Modules
+    - name: Build in-tree modules
       if: ${{ env.NH_MODULES_SUPPORTED == 'true' }}
       shell: bash
       run: |
         set -euo pipefail
-        OUT=out
         export PATH="${CLANG_BIN_PATH}:$PATH"
         export PATH="/usr/lib/ccache:$PATH"
-        cd "$MSM"
-        make ARCH=arm64 LLVM=1 O=$OUT gki_defconfig
-        ./scripts/config --file "$OUT/.config" \
+        export INSTALL_MOD_PATH="$OUT_DIR"
+        cd "$SOURCE_ROOT"
+        make ARCH=arm64 LLVM=1 O="$OUT_DIR" gki_defconfig
+        ./scripts/config --file "$OUT_DIR/.config" \
           --enable CONFIG_LTO_CLANG_THIN \
           --enable CONFIG_LTO_CLANG \
           --enable CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE \
           --disable CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3
-        INSTALL_MOD_PATH="$MSM/out"
-        make ARCH=arm64 LLVM=1 O=$OUT olddefconfig
-        make -j$(nproc --all) ARCH=arm64 LLVM=1 O=$OUT CC="ccache clang" modules
-        make -j$(nproc --all) ARCH=arm64 LLVM=1 O=$OUT INSTALL_MOD_PATH=$INSTALL_MOD_PATH modules_install
+        make ARCH=arm64 LLVM=1 O="$OUT_DIR" olddefconfig
+        make -j"$(nproc --all)" ARCH=arm64 LLVM=1 O="$OUT_DIR" CC="ccache clang" modules
+        make -j"$(nproc --all)" ARCH=arm64 LLVM=1 O="$OUT_DIR" INSTALL_MOD_PATH="$INSTALL_MOD_PATH" modules_install
+
+    - name: Build external vendor modules when present
+      if: ${{ env.NH_MODULES_SUPPORTED == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        export PATH="${CLANG_BIN_PATH}:$PATH"
+        export INSTALL_MOD_PATH="$OUT_DIR"
         cd "$KERNEL_PLATFORM"
-        ext_oplus=($(cat "$KERNEL_PLATFORM/oplus/config/modules.ext.$KERNEL_VER.oplus"))
-        ext_oplus+=( ../vendor/oplus/kernel/explorer )
-        for module in "${ext_oplus[@]}"; do
-          make -C "$module" M="../$module" -j$(nproc --all) ARCH=arm64 KERNEL_SRC=$KERNEL_PLATFORM/./msm-kernel O=$MSM/out LLVM=1 LLVM_IAS=1 DEPMOD=depmod DTC=dtc CHIPSET_COMPANY=QCOM OPLUS_VND_BUILD_PLATFORM=$OP_SOC
-          make -C "$module" M="../$module" -j$(nproc --all) ARCH=arm64 KERNEL_SRC=$KERNEL_PLATFORM/./msm-kernel O=$MSM/out LLVM=1 LLVM_IAS=1 DEPMOD=depmod DTC=dtc CHIPSET_COMPANY=QCOM OPLUS_VND_BUILD_PLATFORM=$OP_SOC INSTALL_MOD_PATH=$INSTALL_MOD_PATH modules_install
-        done
-        ext_qcom=(
-          ../vendor/qcom/opensource/mmrm-driver
-          ../vendor/qcom/opensource/mm-drivers/hw_fence
-          ../vendor/qcom/opensource/mm-drivers/sync_fence
-          ../vendor/qcom/opensource/mm-drivers/msm_ext_display
-          ../vendor/qcom/opensource/securemsm-kernel
-          ../vendor/qcom/opensource/display-drivers/msm
-          ../vendor/qcom/opensource/audio-kernel
-          ../vendor/qcom/opensource/camera-kernel
-          ../vendor/qcom/opensource/video-driver
-          ../vendor/qcom/opensource/graphics-kernel
-          ../vendor/qcom/opensource/dataipa/drivers/platform/msm
-          ../vendor/qcom/opensource/datarmnet/core
-          ../vendor/qcom/opensource/datarmnet-ext/aps
-          ../vendor/qcom/opensource/datarmnet-ext/offload
-          ../vendor/qcom/opensource/datarmnet-ext/shs
-          ../vendor/qcom/opensource/datarmnet-ext/sch
-          ../vendor/qcom/opensource/datarmnet-ext/perf
-          ../vendor/qcom/opensource/datarmnet-ext/perf_tether
-          ../vendor/qcom/opensource/datarmnet-ext/wlan
-          ../vendor/qcom/opensource/eva-kernel
-          ../vendor/qcom/opensource/wlan/platform
-          ../vendor/qcom/opensource/bt-kernel
-          ../vendor/nxp/opensource/driver
-          ../vendor/st/opensource/driver
-          ../vendor/st/opensource/eSE-driver
-        )
-        for module in "${ext_qcom[@]}"; do
-          make -C "$module" M="../$module" -j$(nproc --all) ARCH=arm64 KERNEL_SRC=$KERNEL_PLATFORM/./msm-kernel O=$MSM/out LLVM=1 LLVM_IAS=1 DEPMOD=depmod DTC=dtc modules
-          make -C "$module" M="../$module" -j$(nproc --all) ARCH=arm64 KERNEL_SRC=$KERNEL_PLATFORM/./msm-kernel O=$MSM/out LLVM=1 LLVM_IAS=1 DEPMOD=depmod DTC=dtc INSTALL_MOD_PATH=$INSTALL_MOD_PATH modules_install
-        done
+        built_any=false
+        declare -a module_paths=()
+
+        if [ "$OP_PLATFORM_FAMILY" = "qcom" ]; then
+          modules_ext_file="$KERNEL_PLATFORM/oplus/config/modules.ext.$KERNEL_VER.oplus"
+          if [ -f "$modules_ext_file" ]; then
+            while IFS= read -r module; do
+              module="${module%%#*}"
+              module="${module//[$'\t\r\n ']/}"
+              [ -n "$module" ] || continue
+              module_paths+=("$KERNEL_PLATFORM/$module")
+            done < "$modules_ext_file"
+          fi
+
+          for module in \
+            "$KERNEL_PLATFORM/vendor/oplus/kernel/explorer" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/mmrm-driver" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/mm-drivers/hw_fence" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/mm-drivers/sync_fence" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/mm-drivers/msm_ext_display" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/securemsm-kernel" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/display-drivers/msm" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/audio-kernel" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/camera-kernel" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/video-driver" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/graphics-kernel" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/dataipa/drivers/platform/msm" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/datarmnet/core" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/datarmnet-ext/aps" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/datarmnet-ext/offload" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/datarmnet-ext/shs" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/datarmnet-ext/sch" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/datarmnet-ext/perf" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/datarmnet-ext/perf_tether" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/datarmnet-ext/wlan" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/eva-kernel" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/wlan/platform" \
+            "$KERNEL_PLATFORM/vendor/qcom/opensource/bt-kernel" \
+            "$KERNEL_PLATFORM/vendor/nxp/opensource/driver" \
+            "$KERNEL_PLATFORM/vendor/st/opensource/driver" \
+            "$KERNEL_PLATFORM/vendor/st/opensource/eSE-driver"; do
+            module_paths+=("$module")
+          done
+
+          declare -A seen=()
+          for module in "${module_paths[@]}"; do
+            [ -d "$module" ] || continue
+            if [[ -n "${seen[$module]:-}" ]]; then
+              continue
+            fi
+            seen[$module]=1
+            echo "Building external module: $module"
+            make -C "$module" M="$module" -j"$(nproc --all)" \
+              ARCH=arm64 KERNEL_SRC="$SOURCE_ROOT" O="$OUT_DIR" LLVM=1 LLVM_IAS=1 DEPMOD=depmod DTC=dtc \
+              CHIPSET_COMPANY=QCOM OPLUS_VND_BUILD_PLATFORM="$OP_SOC" modules || continue
+            make -C "$module" M="$module" -j"$(nproc --all)" \
+              ARCH=arm64 KERNEL_SRC="$SOURCE_ROOT" O="$OUT_DIR" LLVM=1 LLVM_IAS=1 DEPMOD=depmod DTC=dtc \
+              CHIPSET_COMPANY=QCOM OPLUS_VND_BUILD_PLATFORM="$OP_SOC" INSTALL_MOD_PATH="$INSTALL_MOD_PATH" modules_install || continue
+            built_any=true
+          done
+
+          if [ "$built_any" = false ]; then
+            echo "::notice::No synced external QCOM vendor module directories were found for ${OP_MODEL}; shipping the in-tree Nethunter module set only."
+          fi
+        else
+          echo "::notice::MediaTek manifests in this repo currently sync only the linked kernel tree, not separate vendor module repositories; shipping the in-tree Nethunter module set only."
+        fi
 
     - name: Filter modules
       if: ${{ env.NH_MODULES_SUPPORTED == 'true' }}
       shell: bash
       run: |
         set -euo pipefail
-        OUT="$MSM/out"
-        UNAME=$(ls "$OUT/lib/modules/")
-        cd "$OUT"
-        mkdir -p modules
-        find lib/modules/"$UNAME" -type f -name '*.ko' -exec cp {} modules/ \;
-        cd modules
+        UNAME=$(basename "$(find "$OUT_DIR/lib/modules" -mindepth 1 -maxdepth 1 -type d | head -n1)")
+        [ -n "$UNAME" ] || { echo "No installed modules directory found"; exit 1; }
+        mkdir -p "$OUT_DIR/modules"
+        find "$OUT_DIR/lib/modules/$UNAME" -type f -name '*.ko' -exec cp {} "$OUT_DIR/modules/" \;
+        cd "$OUT_DIR/modules"
         curl -L -o default_modules.txt https://raw.githubusercontent.com/nullptr-t-oss/kernel_patches/refs/heads/main/default_modules.txt
         while IFS= read -r module; do
-          if [ -e "$module" ]; then rm -f "$module"; fi
+          module="${module%%#*}"
+          module="${module//[$'\r\n']/}"
+          [ -n "$module" ] || continue
+          rm -f "$module"
         done < default_modules.txt
 
     - name: Create Kernel Modules zip
@@ -307,7 +360,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        MODULES_SRC="$MSM/out/modules"
+        MODULES_SRC="$OUT_DIR/modules"
         MODULES_ZIP="$ARTIFACTS_DIR/kernel_modules_${OP_MODEL}_${OP_OS_VERSION}.zip"
         find "$MODULES_SRC" -type f -name '*.ko' -print0 | xargs -0 zip -j "$MODULES_ZIP"
 

@@ -19,7 +19,7 @@
   "uname": "OP-WILD",
   "platform_family": "qcom",
   "nethunter_kernel": false,
-  "nethunter_modules": false,
-  "nethunter_modules_strategy": "none",
-  "nethunter_modules_note": "No external Nethunter module build configured"
+  "nethunter_modules": true,
+  "nethunter_modules_strategy": "qcom_legacy_vendor",
+  "nethunter_modules_note": "QCOM legacy vendor tree implemented; builds in-tree modules plus synced vendor modules when present"
 }
