@@ -532,17 +532,23 @@ jobs:
     name: nethunter-modules (${{ matrix.model }}, ${{ matrix.os_version }})
     needs: set-op-model
     runs-on: ubuntu-latest
-    if: ${{ matrix.nethunter_modules == true }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.set-op-model.outputs.matrix) }}
     steps:
+      - name: Skip when Nethunter modules are disabled for this config
+        if: ${{ matrix.nethunter_modules != true }}
+        run: |
+          echo "Nethunter modules disabled for ${{ matrix.model }} (${{ matrix.os_version }}); skipping."
+
       - name: 📥 Checkout Code
+        if: ${{ matrix.nethunter_modules == true }}
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
       - name: Install Minimal Dependencies
+        if: ${{ matrix.nethunter_modules == true }}
         run: |
           set -euo pipefail
           sudo apt-get -o Acquire::Retries=3 update -qq
@@ -553,12 +559,14 @@ jobs:
           sudo apt-get clean
 
       - name: 🧹 Prepare op_config_json (without KSU fields)
+        if: ${{ matrix.nethunter_modules == true }}
         id: prepare_config
         shell: bash
         run: |
           echo "config_json=$(jq -nc --argjson m '${{ toJSON(matrix) }}' '$m | del(.ksu_type, .ksu_hash)')" >> "$GITHUB_OUTPUT"
 
       - name: 🔨 Build Nethunter Modules
+        if: ${{ matrix.nethunter_modules == true }}
         uses: ./.github/kernel_modules
         with:
           op_config_json: ${{ steps.prepare_config.outputs.config_json }}
