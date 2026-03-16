@@ -4,10 +4,8 @@ inputs:
   op_config_json:
     description: 'JSON string containing full device config'
     required: true
-    type: string
   optimize_level:
     required: false
-    type: string
     default: O2
 
 runs:
