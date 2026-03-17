@@ -380,18 +380,7 @@ jobs:
         id: prepare_config
         shell: bash
         run: |
-          echo "config_json=$(jq -nc --argjson m '${{ toJSON(matrix) }}' '
-            $m
-            | del(.ksu_type, .ksu_hash)
-            | if (.ksu_type == "KSUN"
-                  and .susfs == true
-                  and .android_version == "android15"
-                  and .kernel_version == "6.6"
-                  and (.soc == "sun" or .branch == "wild/mt6991" or .soc == "dimensity9400"))
-              then .susfs = false
-              else .
-              end
-          ')" >> "$GITHUB_OUTPUT"
+          echo "config_json=$(jq -nc --argjson m '${{ toJSON(matrix) }}' '$m | del(.ksu_type, .ksu_hash)')" >> "$GITHUB_OUTPUT"
 
       - name: 🔨 Build Kernel
         id: build

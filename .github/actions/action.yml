@@ -225,16 +225,6 @@ runs:
         fi
         echo "::endgroup::"
 
-    - name: Apply known KSU/SUSFS compatibility guards
-      shell: bash
-      run: |
-        set -euo pipefail
-        if [[ "${OP_SUSFS:-false}" == "true" && "${OP_ANDROID_VERSION:-}" == "android15" && "${OP_KERNEL_VERSION:-}" == "6.6" && "${{ inputs.ksu_type }}" == "KSUN" ]]; then
-          echo "::warning::Disabling SUSFS for ${OP_MODEL}: KernelSU-Next + SUSFS is currently incompatible on android15-6.6 (latest upstream patch stack rejects against current KSUN branches, including dev/stable). Building KSUN without SUSFS for this target until upstream compatibility lands."
-          echo "OP_SUSFS=false" >> "$GITHUB_ENV"
-          echo "SUSFS_DISABLED_REASON=KernelSU-Next+SUSFS is currently incompatible on android15-6.6; auto-disabled for this build" >> "$GITHUB_ENV"
-        fi
-
     - name: Install bindgen only (no rustc)
       shell: bash
       if: ${{ env.OP_RUST_BUILD == 'true' }}
