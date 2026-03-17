@@ -818,6 +818,18 @@ runs:
         else
           echo "NEED_HOOKS=false" >> $GITHUB_ENV
         fi
+
+        LOCAL_SUSFS_FIX_DIR="$GITHUB_ACTION_PATH/../patches/next/susfs_fix_patches/$susfs_version"
+        resolve_susfs_fix_patch() {
+          local patch_name="$1"
+          local local_patch="$LOCAL_SUSFS_FIX_DIR/$patch_name"
+          local remote_patch="$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/$patch_name"
+          if [ -f "$local_patch" ]; then
+            echo "$local_patch"
+          else
+            echo "$remote_patch"
+          fi
+        }
         
         case "$susfs_version" in
           "v1.5.8")
@@ -851,15 +863,21 @@ runs:
               cd "$KSUN_FOLDER"
               patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
               for file in $(find ./kernel -maxdepth 2 -name "*.rej" -exec basename {} .rej \;); do
-                echo "Patching file: $file with fix_$file.patch"
-                patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/fix_$file.patch"
+                patch_name="fix_$file.patch"
+                patch_path="$(resolve_susfs_fix_patch "$patch_name")"
+                echo "Patching file: $file with $patch_name"
+                if [ ! -f "$patch_path" ]; then
+                  echo "::error::Missing SUSFS fix patch: $patch_name"
+                  exit 1
+                fi
+                patch -p1 --forward < "$patch_path"
               done
               echo "Patching Hook Mode!"
-              patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/overwrite_hook_mode.patch"
+              patch -p1 --forward < "$(resolve_susfs_fix_patch overwrite_hook_mode.patch)"
               echo "Patching KSU_TOOLKIT Support for SusFS kernel!"
-              patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/ksu_toolkit.patch"
+              patch -p1 --forward < "$(resolve_susfs_fix_patch ksu_toolkit.patch)"
               echo "Patching Multi-manager Support for SusFS kernel!"
-              patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/multi_manager.patch"
+              patch -p1 --forward < "$(resolve_susfs_fix_patch multi_manager.patch)"
             else
               cd "$KSU_FOLDER"
               patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
