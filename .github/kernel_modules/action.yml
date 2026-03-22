@@ -149,6 +149,7 @@ runs:
         echo "ANDROID_VER=$ANDROID_VERSION" >> "$GITHUB_ENV"
         echo "KERNEL_VER=$VERSION.$PATCHLEVEL" >> "$GITHUB_ENV"
         echo "KERNEL_FULL_VER=$ANDROID_VERSION-$FULL_VERSION" >> "$GITHUB_ENV"
+        echo "CUSTOM_LOCALVERSION=-$ANDROID_VERSION-$OP_UNAME" >> "$GITHUB_ENV"
 
     - name: Clone Nethunter patch repo
       if: ${{ env.NH_MODULES_SUPPORTED == 'true' }}
@@ -238,6 +239,12 @@ runs:
         export INSTALL_MOD_PATH="$OUT_DIR"
         cd "$SOURCE_ROOT"
         make ARCH=arm64 LLVM=1 O="$OUT_DIR" gki_defconfig
+        LOCAL_LOCALVERSION="${CUSTOM_LOCALVERSION:--OP-WILD}"
+        if [ -n "${LOCAL_LOCALVERSION:-}" ]; then
+          ./scripts/config --file "$OUT_DIR/.config" --set-str LOCALVERSION "${LOCAL_LOCALVERSION}"
+          ./scripts/config --file "$OUT_DIR/.config" --disable LOCALVERSION_AUTO || true
+          sed -i 's/scm_version="$(scm_version --short)"/scm_version=""/' scripts/setlocalversion || true
+        fi
         ./scripts/config --file "$OUT_DIR/.config" \
           --enable CONFIG_LTO_CLANG_THIN \
           --enable CONFIG_LTO_CLANG \
@@ -355,6 +362,8 @@ runs:
       run: |
         set -euo pipefail
         MODULES_DIR="$OUT_DIR/modules"
+        EXPECTED_VERMAGIC="$(make -s -C "$SOURCE_ROOT" O="$OUT_DIR" kernelrelease) SMP preempt mod_unload modversions aarch64"
+        echo "Expected vermagic prefix: $EXPECTED_VERMAGIC"
         declare -a required_modules=(
           "cfg80211.ko"
           "mac80211.ko"
@@ -368,6 +377,20 @@ runs:
           if [ ! -f "$MODULES_DIR/$module" ]; then
             echo "::error::Missing required OP13 AR9271 module: $module"
             missing=1
+            continue
+          fi
+          actual_vermagic="$(strings "$MODULES_DIR/$module" | grep -m1 '^vermagic=' | cut -d= -f2- || true)"
+          echo "$module vermagic: ${actual_vermagic:-<missing>}"
+          if [ -z "$actual_vermagic" ]; then
+            echo "::error::Could not extract vermagic from $module"
+            missing=1
+            continue
+          fi
+          if [ "$actual_vermagic" != "$EXPECTED_VERMAGIC" ]; then
+            echo "::error::Vermagic mismatch for $module"
+            echo "::error::Expected: $EXPECTED_VERMAGIC"
+            echo "::error::Actual:   $actual_vermagic"
+            missing=1
           fi
         done
         if [ "$missing" -ne 0 ]; then
@@ -375,7 +398,7 @@ runs:
           ls -1 "$MODULES_DIR" | sed -n '1,200p'
           exit 1
         fi
-        echo "Verified OP13 AR9271 module set: ${required_modules[*]}"
+        echo "Verified OP13 AR9271 module set and vermagic: ${required_modules[*]}"
 
     - name: Create Kernel Modules zip
       if: ${{ env.NH_MODULES_SUPPORTED == 'true' }}
