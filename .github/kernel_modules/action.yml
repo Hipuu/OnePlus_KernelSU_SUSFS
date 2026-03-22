@@ -328,18 +328,54 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        source /tmp/nethunter-lib.sh
         UNAME=$(basename "$(find "$OUT_DIR/lib/modules" -mindepth 1 -maxdepth 1 -type d | head -n1)")
         [ -n "$UNAME" ] || { echo "No installed modules directory found"; exit 1; }
         mkdir -p "$OUT_DIR/modules"
         find "$OUT_DIR/lib/modules/$UNAME" -type f -name '*.ko' -exec cp {} "$OUT_DIR/modules/" \;
         cd "$OUT_DIR/modules"
         curl -L -o default_modules.txt https://raw.githubusercontent.com/nullptr-t-oss/kernel_patches/refs/heads/main/default_modules.txt
+        keep_list=$(mktemp)
+        nethunter_module_keep_list > "$keep_list" || true
         while IFS= read -r module; do
           module="${module%%#*}"
           module="${module//[$'\r\n']/}"
           [ -n "$module" ] || continue
+          if grep -qxF "$module" "$keep_list"; then
+            echo "Keeping module despite default filter: $module"
+            continue
+          fi
           rm -f "$module"
         done < default_modules.txt
+        rm -f "$keep_list"
+
+    - name: Verify OP13 AR9271 module set
+      if: ${{ env.NH_MODULES_SUPPORTED == 'true' && env.OP_MODEL == 'OP13' && env.OP_SOC == 'sun' && env.OP_ANDROID_VERSION == 'android15' && env.OP_KERNEL_VERSION == '6.6' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        MODULES_DIR="$OUT_DIR/modules"
+        declare -a required_modules=(
+          "cfg80211.ko"
+          "mac80211.ko"
+          "ath.ko"
+          "ath9k_hw.ko"
+          "ath9k_common.ko"
+          "ath9k_htc.ko"
+        )
+        missing=0
+        for module in "${required_modules[@]}"; do
+          if [ ! -f "$MODULES_DIR/$module" ]; then
+            echo "::error::Missing required OP13 AR9271 module: $module"
+            missing=1
+          fi
+        done
+        if [ "$missing" -ne 0 ]; then
+          echo "Available module sample:"
+          ls -1 "$MODULES_DIR" | sed -n '1,200p'
+          exit 1
+        fi
+        echo "Verified OP13 AR9271 module set: ${required_modules[*]}"
 
     - name: Create Kernel Modules zip
       if: ${{ env.NH_MODULES_SUPPORTED == 'true' }}

@@ -1,0 +1,227 @@
+name: Oneplus 13
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      make_release:
+        description: 'Do you want to create a release?'
+        required: true
+        type: boolean
+        default: false
+      ksu_type:
+        description: 'KernelSU variant'
+        required: true
+        type: choice
+        options:
+          - KSUN
+          - KSU
+        default: KSUN
+      ksu_branch_or_hash:
+        description: 'KSU branch or commit hash (empty = auto-detect by type)'
+        required: false
+        type: string
+        default: 'dev'
+      optimize_level:
+        description: 'Compiler optimization level'
+        required: true
+        type: choice
+        options: [O2, O3]
+        default: O2
+      clean_build:
+        description: 'Clean build (no ccache)'
+        type: boolean
+        default: false
+      android15-6_6_susfs_branch_or_commit:
+        description: 'Enter SusFS branch or commit hash for android15-6.6'
+        type: string
+        default: ''
+
+jobs:
+  set-op13-config:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.prepare.outputs.matrix }}
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            configs/
+          sparse-checkout-cone-mode: false
+
+      - name: Prepare dedicated OP13 config
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          config=$(jq -c '
+            .
+            + {
+              nethunter_kernel: true,
+              nethunter_modules: true,
+              nethunter_modules_strategy: "qcom_ddk_vendor",
+              nethunter_modules_note: "Dedicated OP13 AR9271 monitor-mode workflow",
+              ar9271_monitor_mode: true
+            }
+          ' configs/oos16/OP13.json)
+
+          ksu_type='${{ inputs.ksu_type }}'
+          ksu_hash='${{ inputs.ksu_branch_or_hash }}'
+          if [ -z "$ksu_hash" ]; then
+            if [ "$ksu_type" = "KSUN" ]; then
+              ksu_hash='dev'
+            else
+              ksu_hash='main'
+            fi
+          fi
+
+          wrapped=$(jq -nc \
+            --argjson cfg "$config" \
+            --arg ksu_type "$ksu_type" \
+            --arg ksu_hash "$ksu_hash" \
+            '{include: [($cfg + {ksu_type: $ksu_type, ksu_hash: $ksu_hash})]}')
+
+          echo "matrix=$wrapped" >> "$GITHUB_OUTPUT"
+          echo "Prepared OP13 config:"
+          echo "$wrapped" | jq .
+
+  build-kernel:
+    name: build-kernel (OP13, OOS16, AR9271)
+    needs: set-op13-config
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.set-op13-config.outputs.matrix) }}
+    steps:
+      - name: 🔍 Resolve SUSFS branch from inputs
+        id: susfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "susfs_branch=${{ inputs.android15-6_6_susfs_branch_or_commit }}" >> "$GITHUB_OUTPUT"
+
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Install Minimal Dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git curl ca-certificates build-essential clang lld flex bison \
+            libelf-dev libssl-dev libncurses-dev zlib1g-dev liblz4-tool \
+            libxml2-utils rsync unzip dwarves file python3 ccache jq bc dos2unix kmod libdw-dev elfutils
+          sudo apt-get clean
+
+      - name: 🧹 Prepare op_config_json (without KSU fields)
+        id: prepare_config
+        shell: bash
+        run: |
+          echo "config_json=$(jq -nc --argjson m '${{ toJSON(matrix) }}' '$m | del(.ksu_type, .ksu_hash)')" >> "$GITHUB_OUTPUT"
+
+      - name: 🔨 Build Kernel
+        id: build
+        uses: ./.github/actions
+        with:
+          op_config_json: ${{ steps.prepare_config.outputs.config_json }}
+          ksu_type: ${{ matrix.ksu_type }}
+          ksu_branch_or_hash: ${{ matrix.ksu_hash }}
+          susfs_commit_hash_or_branch: ${{ steps.susfs.outputs.susfs_branch }}
+          optimize_level: ${{ inputs.optimize_level }}
+          clean: ${{ inputs.clean_build }}
+
+  build-op13-modules:
+    name: build-modules (OP13, OOS16, AR9271)
+    needs: set-op13-config
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.set-op13-config.outputs.matrix) }}
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Install Minimal Dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git curl ca-certificates build-essential clang lld flex bison \
+            libelf-dev libssl-dev libncurses-dev zlib1g-dev liblz4-tool \
+            libxml2-utils rsync unzip dwarves file python3 ccache jq bc dos2unix kmod libdw-dev elfutils
+          sudo apt-get clean
+
+      - name: 🧹 Prepare op_config_json (without KSU fields)
+        id: prepare_config
+        shell: bash
+        run: |
+          echo "config_json=$(jq -nc --argjson m '${{ toJSON(matrix) }}' '$m | del(.ksu_type, .ksu_hash)')" >> "$GITHUB_OUTPUT"
+
+      - name: 🔨 Build OP13 AR9271 modules
+        uses: ./.github/kernel_modules
+        with:
+          op_config_json: ${{ steps.prepare_config.outputs.config_json }}
+          optimize_level: ${{ inputs.optimize_level }}
+
+  release:
+    needs: [build-kernel, build-op13-modules]
+    runs-on: ubuntu-latest
+    if: ${{ inputs.make_release }}
+    env:
+      REPO_OWNER: ${{ github.repository_owner }}
+      REPO_NAME: ${{ github.event.repository.name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: 🏷️ Generate and Create New Tag
+        run: |
+          set -euo pipefail
+          BASE_TAG="op13-ar9271-r0"
+          LATEST_TAG=$(gh api repos/$REPO_OWNER/$REPO_NAME/tags --jq '.[].name' | grep '^op13-ar9271-r' | sort -rV | head -n1 || true)
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_TAG="$BASE_TAG"
+          fi
+          NEW_TAG=$(echo "$LATEST_TAG" | awk -F'-r' '{suffix=$2; if (!suffix) suffix=0; suffix++; printf "%s-r%d", $1, suffix}')
+          git tag "$NEW_TAG"
+          git push origin "$NEW_TAG"
+          echo "NEW_TAG=$NEW_TAG" >> "$GITHUB_ENV"
+
+      - name: 📥 Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./downloaded-artifacts
+
+      - name: 📝 Generate release notes
+        run: |
+          cat > release_notes.md <<'EOF'
+          # OP13 AR9271 Monitor-Mode Build
+
+          Dedicated OnePlus 13 workflow using the main kernel patch/build logic plus OP13-specific Atheros AR9271 module packaging.
+
+          Included intent:
+          - OP13 / OOS16 / android15-6.6
+          - KernelSU + SUSFS flow from main builder
+          - Nethunter kernel config enabled inline
+          - AR9271-focused module packaging with cfg80211/mac80211 preserved
+          - Required module verification for ath9k_htc stack
+          EOF
+
+      - name: 🚀 Create GitHub Release
+        run: |
+          gh release create "$NEW_TAG" \
+            --repo "$REPO_OWNER/$REPO_NAME" \
+            --title "OP13 AR9271 Monitor-Mode Build $NEW_TAG" \
+            --notes-file release_notes.md \
+            ./downloaded-artifacts/**/*

@@ -133,6 +133,9 @@ apply_nethunter_module_config() {
   local scripts_config="$2"
 
   "$scripts_config" --file "$config_file" \
+    --module CONFIG_CFG80211 \
+    --module CONFIG_MAC80211 \
+    --module CONFIG_MAC80211_LEDS \
     --enable CONFIG_WLAN_VENDOR_REALTEK \
     --enable CONFIG_WLAN_VENDOR_ATH \
     --module CONFIG_ATH_COMMON \
@@ -140,9 +143,13 @@ apply_nethunter_module_config() {
     --module CONFIG_ATH9K_HW \
     --module CONFIG_ATH9K_HTC \
     --module CONFIG_ATH9K_COMMON \
+    --enable CONFIG_ATH9K_PCI \
     --module CONFIG_ATH10K \
     --module CONFIG_ATH10K_USB \
+    --module CONFIG_ATH10K_PCI \
     --module CONFIG_ATH11K \
+    --module CONFIG_ATH11K_AHB \
+    --module CONFIG_ATH11K_PCI \
     --enable CONFIG_WLAN_VENDOR_MEDIATEK \
     --module CONFIG_MT7601U \
     --module CONFIG_MT76_CORE \
@@ -156,6 +163,31 @@ apply_nethunter_module_config() {
     --module CONFIG_MT7615_COMMON \
     --module CONFIG_MT7915E \
     --module CONFIG_MT7921E \
-    --module CONFIG_MAC80211_LEDS \
     --module CONFIG_CAN_SLCAN
+}
+
+nethunter_module_keep_list() {
+  case "${OP_MODEL:-}:${OP_SOC:-}:${OP_ANDROID_VERSION:-}:${OP_KERNEL_VERSION:-}" in
+    OP13:sun:android15:6.6)
+      cat <<'EOF'
+ath.ko
+ath9k.ko
+ath9k_common.ko
+ath9k_common.ko.zst
+ath9k_common.ko.xz
+ath9k_htc.ko
+ath9k_htc.ko.zst
+ath9k_htc.ko.xz
+ath9k_hw.ko
+ath9k_hw.ko.zst
+ath9k_hw.ko.xz
+cfg80211.ko
+cfg80211.ko.zst
+cfg80211.ko.xz
+mac80211.ko
+mac80211.ko.zst
+mac80211.ko.xz
+EOF
+      ;;
+  esac
 }
