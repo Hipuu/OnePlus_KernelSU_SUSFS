@@ -4,24 +4,33 @@ inputs:
   op_config_json:
     description: 'JSON string containing full device config'
     required: true
+    type: string
   ksu_type:
     description: 'Select KSU Type'
     required: true
+    type: choice
+    options:
+      - KSUN
+      - KSU
   ksu_branch_or_hash:
     description: 'KSU branch or commit hash (empty = auto-detect by ksu_type)'
     required: false
+    type: string
     default: ""
   susfs_commit_hash_or_branch:
     description: 'SUSFS branch or commit hash (empty = auto-detect by kernel version)'
     required: false
+    type: string
     default: ""
   optimize_level:
     description: 'Compiler optimization level (O2 or O3)'
     required: false
+    type: string
     default: O2
   clean:
     description: 'Force clean build without ccache acceleration'
     required: false
+    type: string
     default: 'false'
 
 outputs:
@@ -818,18 +827,6 @@ runs:
         else
           echo "NEED_HOOKS=false" >> $GITHUB_ENV
         fi
-
-        LOCAL_SUSFS_FIX_DIR="$GITHUB_ACTION_PATH/../patches/next/susfs_fix_patches/$susfs_version"
-        resolve_susfs_fix_patch() {
-          local patch_name="$1"
-          local local_patch="$LOCAL_SUSFS_FIX_DIR/$patch_name"
-          local remote_patch="$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/$patch_name"
-          if [ -f "$local_patch" ]; then
-            echo "$local_patch"
-          else
-            echo "$remote_patch"
-          fi
-        }
         
         case "$susfs_version" in
           "v1.5.8")
@@ -863,21 +860,38 @@ runs:
               cd "$KSUN_FOLDER"
               patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
               for file in $(find ./kernel -maxdepth 2 -name "*.rej" -exec basename {} .rej \;); do
-                patch_name="fix_$file.patch"
-                patch_path="$(resolve_susfs_fix_patch "$patch_name")"
-                echo "Patching file: $file with $patch_name"
-                if [ ! -f "$patch_path" ]; then
-                  echo "::error::Missing SUSFS fix patch: $patch_name"
-                  exit 1
-                fi
-                patch -p1 --forward < "$patch_path"
+                echo "Patching file: $file with fix_$file.patch"
+                patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/fix_$file.patch"
               done
               echo "Patching Hook Mode!"
-              patch -p1 --forward < "$(resolve_susfs_fix_patch overwrite_hook_mode.patch)"
+              patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/overwrite_hook_mode.patch"
               echo "Patching KSU_TOOLKIT Support for SusFS kernel!"
-              patch -p1 --forward < "$(resolve_susfs_fix_patch ksu_toolkit.patch)"
+              patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/ksu_toolkit.patch"
               echo "Patching Multi-manager Support for SusFS kernel!"
-              patch -p1 --forward < "$(resolve_susfs_fix_patch multi_manager.patch)"
+              patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/multi_manager.patch"
+              echo "Patching Multi-manager sepolicy Support for SusFS kernel!"
+              patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/multi_sepolicy_fix.patch"
+            else
+              cd "$KSU_FOLDER"
+              patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
+            fi
+            ;;
+          "v2.1.0")
+            if [ "${{ inputs.ksu_type }}" = "KSUN" ]; then
+              cd "$KSUN_FOLDER"
+              patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
+              for file in $(find ./kernel -maxdepth 2 -name "*.rej" -exec basename {} .rej \;); do
+                echo "Patching file: $file with fix_$file.patch"
+                patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/fix_$file.patch"
+              done
+              echo "Patching Hook Mode!"
+              patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/overwrite_hook_mode.patch"
+              echo "Patching KSU_TOOLKIT Support for SusFS kernel!"
+              patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/ksu_toolkit.patch"
+              echo "Patching Multi-manager Support for SusFS kernel!"
+              patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/multi_manager.patch"
+              echo "Patching Multi-manager sepolicy Support for SusFS kernel!"
+              patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/multi_sepolicy_fix.patch"
             else
               cd "$KSU_FOLDER"
               patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
@@ -912,23 +926,20 @@ runs:
         fi
         if [ "${{ env.ANDROID_VER }}" = "android12" ] && [ "${{ env.KERNEL_VER }}" = "5.10" ]; then
           if ! grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
-            echo "vma_pages line not found for android12-5.10. Injecting temporary compat shim."
-            python3 -c 'from pathlib import Path; p=Path("./fs/proc/task_mmu.c"); t=p.read_text(); n="\t\t\treturn 0;\n"; r="\t\t\tif (!vma_pages(vma))\n\t\t\t\tgoto show_pad;\n"; p.write_text(t.replace(n, r, 1)) if n in t and r not in t else None'
+            echo "vma_pages Line not found. Fake Patching!"
             fake_patched=1
           fi
         fi
         if [ "${{ env.ANDROID_VER }}" = "android13" ] && [ "${{ env.KERNEL_VER }}" = "5.15" ]; then
           if ! grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
-            echo "vma_pages line not found for android13-5.15. Injecting temporary compat shim."
-            python3 -c 'from pathlib import Path; p=Path("./fs/proc/task_mmu.c"); t=p.read_text(); n="\t\t\treturn 0;\n"; r="\t\t\tif (!vma_pages(vma))\n\t\t\t\tgoto show_pad;\n"; p.write_text(t.replace(n, r, 1)) if n in t and r not in t else None'
+            echo "vma_pages Line not found. Fake Patching!"
             fake_patched=1
           fi
         fi
         
         if [ "${{ env.ANDROID_VER }}" = "android14" ] && [ "${{ env.KERNEL_VER }}" = "6.1" ]; then
           if ! grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
-            echo "vma_pages line not found for android14-6.1. Injecting temporary compat shim."
-            python3 -c 'from pathlib import Path; p=Path("./fs/proc/task_mmu.c"); t=p.read_text(); n="\t\t\treturn 0;\n"; r="\t\t\tif (!vma_pages(vma))\n\t\t\t\tgoto show_pad;\n"; p.write_text(t.replace(n, r, 1)) if n in t and r not in t else None'
+            echo "vma_pages Line not found. Fake Patching!"
             fake_patched=1
           fi
           
@@ -938,13 +949,7 @@ runs:
           fi
         fi
         
-        SUSFS_ADD_PATCH="$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch"
-        if patch -p1 --forward --fuzz=3 --dry-run < "$SUSFS_ADD_PATCH"; then
-          patch -p1 --forward --fuzz=3 < "$SUSFS_ADD_PATCH"
-        else
-          echo "::warning::Initial SUSFS patch dry-run failed for $SUSFS_ADD_PATCH; applying with fuzz after compatibility shims"
-          patch -p1 --forward --fuzz=3 < "$SUSFS_ADD_PATCH"
-        fi
+        patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch"
         
         # Revert Fake kernel patch
         if [ "$fake_patched" = 1 ]; then
@@ -955,21 +960,21 @@ runs:
             fi
           fi
           if [ "${{ env.ANDROID_VER }}" = "android12" ] && [ "${{ env.KERNEL_VER }}" = "5.10" ]; then
-            if grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
-              echo "Removing temporary vma_pages compat shim for android12-5.10"
-              python3 -c 'from pathlib import Path; p=Path("./fs/proc/task_mmu.c"); t=p.read_text(); n="\t\t\tif (!vma_pages(vma))\n\t\t\t\tgoto show_pad;\n"; r="\t\t\treturn 0;\n"; p.write_text(t.replace(n, r, 1)) if n in t else None'
+            if grep -qxF $'\t\t\tgoto show_pad;' ./fs/proc/task_mmu.c; then
+              echo "vma_pages Line found. Revert Fake Patching!"
+              sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
             fi
           fi
           if [ "${{ env.ANDROID_VER }}" = "android13" ] && [ "${{ env.KERNEL_VER }}" = "5.15" ]; then
-            if grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
-              echo "Removing temporary vma_pages compat shim for android13-5.15"
-              python3 -c 'from pathlib import Path; p=Path("./fs/proc/task_mmu.c"); t=p.read_text(); n="\t\t\tif (!vma_pages(vma))\n\t\t\t\tgoto show_pad;\n"; r="\t\t\treturn 0;\n"; p.write_text(t.replace(n, r, 1)) if n in t else None'
+            if grep -qxF $'\t\t\tgoto show_pad;' ./fs/proc/task_mmu.c; then
+              echo "vma_pages Line found. Revert Fake Patching!"
+              sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
             fi
           fi
           if [ "${{ env.ANDROID_VER }}" = "android14" ] && [ "${{ env.KERNEL_VER }}" = "6.1" ]; then
-            if grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
-              echo "Removing temporary vma_pages compat shim for android14-6.1"
-              python3 -c 'from pathlib import Path; p=Path("./fs/proc/task_mmu.c"); t=p.read_text(); n="\t\t\tif (!vma_pages(vma))\n\t\t\t\tgoto show_pad;\n"; r="\t\t\treturn 0;\n"; p.write_text(t.replace(n, r, 1)) if n in t else None'
+            if grep -qxF $'\t\t\tgoto show_pad;' ./fs/proc/task_mmu.c; then
+              echo "vma_pages Line found. Revert Fake Patching!"
+              sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
             fi
           fi
         fi
@@ -1629,6 +1634,7 @@ runs:
         fi
         
         cp "$IMAGE_PATH" "$AK3_FOLDER/Image"
+        mv "${ARTIFACTS_FOLDER}/${OP_MODEL}_${OP_OS_VERSION}.txt" "$AK3_FOLDER/"
         cd "$AK3_FOLDER"
         
         if [ "${{ env.OP_SUSFS }}" = true ]; then
@@ -1650,7 +1656,7 @@ runs:
         
         mv "$ZIP_NAME" "$ARTIFACTS_FOLDER/"
         
-        find "$ARTIFACTS_FOLDER" -maxdepth 1 -type f ! -name "$ZIP_NAME" ! -name "${OP_MODEL}_${OP_OS_VERSION}.txt" -delete
+        find "$ARTIFACTS_FOLDER" -maxdepth 1 -type f ! -name "$ZIP_NAME" -delete
         
         ZIP_SIZE=$(stat -c%s "$ARTIFACTS_FOLDER/$ZIP_NAME")
         ZIP_SHA256=$(sha256sum "$ARTIFACTS_FOLDER/$ZIP_NAME" | awk '{print $1}')
@@ -1716,6 +1722,7 @@ runs:
           else
             echo "ccache: Disabled (clean build)"
           fi
+          echo "Artifact Name: ${{ env.ZIP_NAME }}"
         } | tee summary.txt
         
         {
@@ -1785,13 +1792,15 @@ runs:
           echo "| **Image SHA256** | \`${{ steps.collect_stats.outputs.image_sha256 }}\` |"
           echo "| **Warnings** | ${{ steps.collect_stats.outputs.warnings_count }} |"
           echo "| **Compiler** | \`${CLANG_VERSION:-unknown}\` |"
+          echo "| **Artifact Name** | \`${{ env.ZIP_NAME }}\` |"
         } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Upload Artifacts
       if: success() && steps.create_zip.conclusion == 'success'
       uses: actions/upload-artifact@v7
       with:
-        name: kernel-${{ inputs.ksu_type }}-${{ env.CONFIG }}_${{ env.OP_OS_VERSION }}
-        path: ${{ env.ARTIFACTS_FOLDER }}/
+        name: ${{ env.ZIP_NAME }}
+        path: ${{ env.ARTIFACTS_FOLDER }}/${{ env.ZIP_NAME }}
+        archive: false
         compression-level: 0
         retention-days: 90
