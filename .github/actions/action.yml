@@ -1155,6 +1155,7 @@ runs:
         CONFIG_TMPFS_POSIX_ACL=y
         EOF
 
+
     - name: Add Nethunter inline configs
       if: ${{ env.OP_NETHUNTER_KERNEL == 'true' }}
       shell: bash

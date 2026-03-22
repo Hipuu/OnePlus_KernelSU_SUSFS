@@ -528,60 +528,16 @@ jobs:
           
           echo "::endgroup::"
 
-  build-nethunter-modules:
-    name: nethunter-modules (${{ matrix.model }}, ${{ matrix.os_version }})
-    needs: set-op-model
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.set-op-model.outputs.matrix) }}
-    steps:
-      - name: Skip when Nethunter modules are disabled for this config
-        if: ${{ matrix.nethunter_modules != true }}
-        run: |
-          echo "Nethunter modules disabled for ${{ matrix.model }} (${{ matrix.os_version }}); skipping."
-
-      - name: 📥 Checkout Code
-        if: ${{ matrix.nethunter_modules == true }}
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-
-      - name: Install Minimal Dependencies
-        if: ${{ matrix.nethunter_modules == true }}
-        run: |
-          set -euo pipefail
-          sudo apt-get -o Acquire::Retries=3 update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            git curl ca-certificates build-essential clang lld flex bison \
-            libelf-dev libssl-dev libncurses-dev zlib1g-dev liblz4-tool \
-            libxml2-utils rsync unzip dwarves file python3 ccache jq bc dos2unix kmod libdw-dev elfutils
-          sudo apt-get clean
-
-      - name: 🧹 Prepare op_config_json (without KSU fields)
-        if: ${{ matrix.nethunter_modules == true }}
-        id: prepare_config
-        shell: bash
-        run: |
-          echo "config_json=$(jq -nc --argjson m '${{ toJSON(matrix) }}' '$m | del(.ksu_type, .ksu_hash)')" >> "$GITHUB_OUTPUT"
-
-      - name: 🔨 Build Nethunter Modules
-        if: ${{ matrix.nethunter_modules == true }}
-        uses: ./.github/kernel_modules
-        with:
-          op_config_json: ${{ steps.prepare_config.outputs.config_json }}
-          optimize_level: ${{ inputs.optimize_level }}
-
   trigger-release:
-    needs: [build, build-nethunter-modules]
+    needs: [build]
     runs-on: ubuntu-latest
     if: ${{ inputs.make_release }}
     env:
       REPO_OWNER: ${{ github.repository_owner }}
       REPO_NAME: ${{ github.event.repository.name }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      RELEASE_NAME: '*TEST BUILD* OnePlus Kernels With KernelSU Next & SUSFS v2.0.0 *TEST BUILD*'
-      SUSFS_BASE_VERSION: 'v2.0.0'
+      RELEASE_NAME: '*TEST BUILD* OnePlus Kernels With KernelSU Next & SUSFS v2.1.0 *TEST BUILD*'
+      SUSFS_BASE_VERSION: 'v2.1.0'
     steps:
       - name: 📥 Checkout code
         uses: actions/checkout@v6
@@ -604,9 +560,11 @@ jobs:
           git push origin $NEW_TAG
 
       - name: 📥 Download Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: ./downloaded-artifacts
+          merge-multiple: true
+          skip-decompress: true
 
       - name: 📝 Generate Device List and Final Release Notes
         id: generate-notes
@@ -616,17 +574,24 @@ jobs:
           # Collect build metadata
           declare -A device_info
           
-          JSON_BUILD_DATA=$(jq -c '.' ./downloaded-artifacts/build-matrix/matrix.json)
+          JSON_BUILD_DATA=$(jq -c '.' ./downloaded-artifacts/matrix.json)
           
-          for file in $(find downloaded-artifacts -name "*.txt" -type f | sort); do
+          for file in $(find downloaded-artifacts -maxdepth 1 -name "*.zip" -type f | sort); do
             if [ -f "$file" ]; then
-              full_model=$(basename "$file" .txt)
-              model=$(echo "$full_model" | sed -E 's/_[^_]*$//')
-              kernel_version=$(sed -n '1p' "$file")
-              os_version=$(sed -n '2p' "$file")
-              ksu_type=$(sed -n '3p' "$file")
-              ksu_ver=$(sed -n '4p' "$file")
-              susfs_ver=$(sed -n '5p' "$file")
+              zipname=$(basename "$file" .zip)
+              rest="${zipname#AK3_}"
+              IFS='_' read -ra parts <<< "$rest"
+              model="${parts[0]}"
+              os_version="${parts[1]}"
+              kernel_version="${parts[2]}"
+              ksu_type="${parts[3]}"
+              ksu_ver="${parts[4]}"
+              if [ "${parts[5]:-}" = "SuSFS" ]; then
+                susfs_ver="${parts[6]:-unknown}"
+              else
+                susfs_ver="none"
+              fi
+              full_model="${model}_${os_version}"
               device_info["$full_model"]="$model|$os_version|$kernel_version|$ksu_type|$ksu_ver|$susfs_ver"
             fi
           done
@@ -860,7 +825,7 @@ jobs:
           ## 📜 Changelog
           
           ### This Release
-          - Updated SUSFS to v2.0.0.
+          - Updated SUSFS to v2.1.0.
           - Added HMBIRD support for all SM8750/MT6991 devices.
           - Improved ccache build system.
           - Enhanced SUSFS hiding capabilities.
@@ -904,7 +869,7 @@ jobs:
 
       - name: 📤 Upload Release Assets Dynamically
         run: |
-          for file in ./downloaded-artifacts/*/*.zip; do
+          for file in ./downloaded-artifacts/*.zip; do
             if [ -f "$file" ]; then
               echo "Uploading $file..."
               gh release upload "${{ env.NEW_TAG }}" "$file" --clobber
@@ -921,12 +886,12 @@ jobs:
           ## 🎉 Release Created Successfully
           
           **Tag:** [\`${{ env.NEW_TAG }}\`](${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ env.NEW_TAG }})  
-          **Kernels:** $(find ./downloaded-artifacts -name "*.zip" | wc -l)
+          **Kernels:** $(find ./downloaded-artifacts -maxdepth 1 -name "*.zip" -type f | wc -l)
           
           ### 📦 Assets
           EOF
           
-          for zip in ./downloaded-artifacts/*/*.zip; do
+          for zip in ./downloaded-artifacts/*.zip; do
             if [ -f "$zip" ]; then
               name=$(basename "$zip")
               size=$(stat -c%s "$zip")
