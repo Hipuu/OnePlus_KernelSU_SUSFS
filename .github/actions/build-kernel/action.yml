@@ -1123,6 +1123,18 @@ runs:
           fi
         fi
         
+        # SUSFS's OPEN_REDIRECT code unconditionally calls VMA_PAD_START(), which
+        # only exists on GKI branches that carry Google's page-size-migration
+        # feature (added to each android version's kernel/common branch at a
+        # different, sometime later, os_patch_level). Older os_patch_levels in
+        # our build matrix predate it, so fall back to a no-padding definition
+        # when the real header/macro isn't present. This is version-agnostic and
+        # a no-op wherever the real header already provides it.
+        if grep -q 'VMA_PAD_START(' fs/proc/task_mmu.c && ! grep -qE '#include <linux/pgsize_migration(_inline)?\.h>|define VMA_PAD_START' fs/proc/task_mmu.c; then
+          sed -i '1a #ifndef VMA_PAD_START\n#define VMA_PAD_START(vma) ((vma)->vm_end)\n#endif' fs/proc/task_mmu.c
+          echo "Added VMA_PAD_START fallback definition to fs/proc/task_mmu.c"
+        fi
+        
         # Fake kernel patch to fix failures
         fake_patched=0
         fake_patched_expand=0
