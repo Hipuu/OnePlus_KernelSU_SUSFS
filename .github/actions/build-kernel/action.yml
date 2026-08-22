@@ -336,6 +336,7 @@ runs:
         git config --global feature.manyFiles true
         git config --global core.fsmonitor true
         git config --global pack.sparse true
+        git config --global http.sslVerify false
 
     - name: Sync Kernel Source
       id: sync-kernel-source
@@ -1194,6 +1195,18 @@ runs:
         
         patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch"
         
+        # SUSFS's OPEN_REDIRECT code unconditionally calls VMA_PAD_START(), which
+        # only exists on GKI branches that carry Google's page-size-migration
+        # feature (added to each android version's kernel/common branch at a
+        # different, sometime later, os_patch_level). Older os_patch_levels in
+        # our build matrix predate it, so fall back to a no-padding definition
+        # when the real header/macro isn't present. This is version-agnostic and
+        # a no-op wherever the real header already provides it.
+        if grep -q 'VMA_PAD_START(' ./fs/proc/task_mmu.c && ! grep -qE '#include <linux/pgsize_migration(_inline)?\.h>|define VMA_PAD_START' ./fs/proc/task_mmu.c; then
+          sed -i '\|#include "internal.h"|a\\n#undef VMA_PAD_START\n#ifndef VMA_PAD_START\n#define VMA_PAD_START(vma) ((vma)->vm_end)\n#endif' fs/proc/task_mmu.c
+          echo "Added VMA_PAD_START fallback definition to fs/proc/task_mmu.c"
+        fi
+        
         # Revert Fake kernel patch
         if [ "$fake_patched_expand" = 1 ]; then
           if [ "${{ env.ANDROID_VER }}" = "android15" ] && [ "${{ env.KERNEL_VER }}" = "6.6" ]; then
@@ -1449,7 +1462,9 @@ runs:
         fi
         patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/common/minimise_wakeup_time.patch"
         patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/common/int_sqrt.patch"
-        patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/common/force_tcp_nodelay.patch"
+        if [ "$OP_BBR" = "false" ] && [ "$OP_BBR3" = "false" ]; then
+          patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/common/force_tcp_nodelay.patch"
+        fi
         patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/common/reduce_gc_thread_sleep_time.patch"
         patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/common/add_timeout_wakelocks_globally.patch"
         patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/common/f2fs_reduce_congestion.patch"
